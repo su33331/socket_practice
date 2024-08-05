@@ -6,13 +6,38 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
+#include <iostream>
+#include <random>
+#include <vector>
+#include <sstream>  // 追加
 
 #define PORT 8000
 #define BACKLOG 10
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int connection_count = 0;
+
+// 数字の文字列を受け取り、ソートして再び文字列に変換する関数
+std::string sortDigits(const std::string &input) {
+    // 数字の文字列を整数のベクターに変換
+    std::vector<int> digits;
+    for (char ch : input) {
+        if (std::isdigit(ch)) {
+            digits.push_back(ch - '0'); // '0'を引いて整数に変換
+        }
+    }
+
+    // 数字をソート
+    std::sort(digits.begin(), digits.end());
+
+    // ソートされた数字を文字列に変換
+    std::ostringstream oss;
+    for (int num : digits) {
+        oss << num;
+    }
+
+    return oss.str();
+}
 
 void *handle_client(void *arg) {
     int new_sockfd = *(int *)arg;
@@ -21,13 +46,14 @@ void *handle_client(void *arg) {
     char buffer[256];
     int n;
 
-    // クライアントに一意の番号を送信
+    // クライアントにコネクションIDを送信
     pthread_mutex_lock(&mutex);
     connection_count++;
     int connection_id = connection_count;
     pthread_mutex_unlock(&mutex);
+    std::string content = "1:" + std::to_string(connection_id);
 
-    snprintf(buffer, sizeof(buffer), "%d", connection_id);
+    snprintf(buffer, sizeof(buffer), "%s", content.c_str());
     n = send(new_sockfd, buffer, strlen(buffer), 0);
     if (n < 0) {
         perror("ERROR writing to socket");
@@ -35,12 +61,37 @@ void *handle_client(void *arg) {
         return NULL;
     }
 
+    // データの受信
+    memset(buffer, 0, sizeof(buffer));
+    n = recv(new_sockfd, buffer, sizeof(buffer) - 1, 0);
+    if (n < 0) {
+        perror("ERROR reading from socket");
+        close(new_sockfd);
+        return NULL;
+    }
+    std::string received_data(buffer);
+    std::string prefix = "2:";
+    if (received_data.rfind(prefix, 0) == 0){
+        std::string random_nums = received_data.substr(prefix.length());
+        printf("Message from client: %s\n", random_nums.c_str());
+
+        // ソートして再び送信
+        std::string sorted_nums = sortDigits(random_nums);
+        content = "3:" + sorted_nums;
+        snprintf(buffer, sizeof(buffer), "%s", content.c_str());
+        n = send(new_sockfd, buffer, strlen(buffer), 0);
+        if (n < 0) {
+            perror("ERROR writing to socket");
+            close(new_sockfd);
+            return NULL;
+        }
+    }
     close(new_sockfd);
     return NULL;
 }
 
 int main() {
-    int sockfd, *new_sockfd;
+    int sockfd;
     struct sockaddr_in serv_addr, cli_addr;
     socklen_t clilen;
 
@@ -71,7 +122,7 @@ int main() {
     }
 
     while (1) {
-        new_sockfd = (int *)malloc(sizeof(int));
+        int *new_sockfd = (int *)malloc(sizeof(int));
         if (new_sockfd == NULL) {
             perror("ERROR allocating memory");
             continue;
